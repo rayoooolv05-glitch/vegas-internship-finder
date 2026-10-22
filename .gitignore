@@ -1,0 +1,4 @@
+data/jobs_cache.json
+.venv/
+__pycache__/
+.env
