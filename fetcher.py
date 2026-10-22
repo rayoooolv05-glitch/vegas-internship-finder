@@ -29,9 +29,21 @@ DEFAULT_QUERIES = [
     "Field Engineer Intern",
     "Superintendent Intern",
     "Construction Management Co-op",
+    "Civil Engineering Intern",
+    "CMST Intern",
+    "Summer Associate",
+    "Field/Operations Intern",
 ]
 # Only titles containing one of these words are kept, so full-time roles are dropped.
-INTERN_TITLE_PATTERN = re.compile(r"\b(interns?|internships?|co-?ops?)\b", re.IGNORECASE)
+INTERN_TITLE_PATTERN = re.compile(
+    r"\b(interns?|internships?|co-?ops?|summer associates?)\b", re.IGNORECASE
+)
+TOP_CONTRACTORS = ["Clark Construction", "ARCO", "Whiting-Turner", "IMEG", "Harris"]
+TOP_CONTRACTOR_PATTERN = re.compile(
+    r"\b(?:" + "|".join(re.escape(name) for name in TOP_CONTRACTORS) + r")\b",
+    re.IGNORECASE,
+)
+SUMMER_2027_PATTERN = re.compile(r"\bsummer\s+2027\b", re.IGNORECASE)
 CACHE_FILE = Path(__file__).parent / "data" / "jobs_cache.json"
 CACHE_TTL_SECONDS = 60 * 60 * 24  # refresh once a day to conserve free searches
 
@@ -73,6 +85,16 @@ def normalize_job(raw: dict, query: str) -> Job:
 def is_internship(title: str) -> bool:
     """Return True when the job title names an internship or co-op role."""
     return bool(INTERN_TITLE_PATTERN.search(title))
+
+
+def is_top_contractor(company: str) -> bool:
+    """Return True when the company is one of the highlighted contractors."""
+    return bool(TOP_CONTRACTOR_PATTERN.search(company))
+
+
+def mentions_summer_2027(title: str, description: str) -> bool:
+    """Return True when the title or description mentions Summer 2027."""
+    return bool(SUMMER_2027_PATTERN.search(f"{title} {description}"))
 
 
 def search_jobs(query: str, api_key: str, location: str = DEFAULT_LOCATION) -> list[Job]:

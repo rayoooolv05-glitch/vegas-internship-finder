@@ -3,7 +3,13 @@
 import pandas as pd
 import streamlit as st
 
-from fetcher import DEFAULT_QUERIES, get_api_key, load_or_fetch
+from fetcher import (
+    DEFAULT_QUERIES,
+    get_api_key,
+    is_top_contractor,
+    load_or_fetch,
+    mentions_summer_2027,
+)
 
 st.set_page_config(page_title="Las Vegas Construction Internships", layout="wide")
 
@@ -11,7 +17,26 @@ st.set_page_config(page_title="Las Vegas Construction Internships", layout="wide
 @st.cache_data(show_spinner="Fetching internships from Google Jobs...", ttl=60 * 60)
 def get_jobs_frame(api_key: str, force: bool) -> pd.DataFrame:
     jobs = load_or_fetch(api_key, force=force)
-    return pd.DataFrame([job.__dict__ for job in jobs])
+    df = pd.DataFrame([job.__dict__ for job in jobs])
+    if df.empty:
+        return df
+    df["top_contractor"] = df["company"].map(is_top_contractor)
+    df["summer_2027"] = [
+        mentions_summer_2027(title, description)
+        for title, description in zip(df["title"], df["description"])
+    ]
+    df["tags"] = [
+        " · ".join(
+            label
+            for label, flag in (
+                ("⭐ Top Contractor", top),
+                ("☀️ Summer 2027", summer),
+            )
+            if flag
+        )
+        for top, summer in zip(df["top_contractor"], df["summer_2027"])
+    ]
+    return df
 
 
 def main() -> None:
@@ -57,10 +82,11 @@ def main() -> None:
     col2.metric("Companies", filtered["company"].nunique())
 
     st.dataframe(
-        filtered[["company", "title", "location", "description", "apply_link"]],
+        filtered[["company", "title", "tags", "location", "description", "apply_link"]],
         column_config={
             "company": "Company",
             "title": "Job title",
+            "tags": st.column_config.TextColumn("Tags", width="medium"),
             "location": "Location",
             "description": "Description",
             "apply_link": st.column_config.LinkColumn("Apply", display_text="Apply"),

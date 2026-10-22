@@ -1,6 +1,12 @@
 import pytest
 
-from fetcher import DEFAULT_QUERIES, is_internship, normalize_job
+from fetcher import (
+    DEFAULT_QUERIES,
+    is_internship,
+    is_top_contractor,
+    mentions_summer_2027,
+    normalize_job,
+)
 
 
 def test_normalize_job_extracts_core_fields():
@@ -64,3 +70,28 @@ def test_default_queries_cover_expanded_roles():
         "Preconstruction Intern",
     ]:
         assert query in DEFAULT_QUERIES
+
+
+@pytest.mark.parametrize("title", ["Summer Associate - Estimating", "Summer Associates Program"])
+def test_is_internship_keeps_summer_associate_titles(title):
+    assert is_internship(title)
+
+
+@pytest.mark.parametrize(
+    "company",
+    ["Clark Construction Group", "ARCO Design/Build", "The Whiting-Turner Contracting", "IMEG Corp", "Harris Company"],
+)
+def test_is_top_contractor_matches_listed_firms(company):
+    assert is_top_contractor(company)
+
+
+@pytest.mark.parametrize("company", ["Harrisburg Builders", "Murray Company", "Arcosanti Foundation"])
+def test_is_top_contractor_ignores_partial_matches(company):
+    assert not is_top_contractor(company)
+
+
+def test_mentions_summer_2027_checks_title_and_description():
+    assert mentions_summer_2027("Summer 2027 Project Engineer Intern", "")
+    assert mentions_summer_2027("Estimating Intern", "Paid internship starting SUMMER  2027.")
+    assert not mentions_summer_2027("Estimating Intern", "Starts Summer 2026")
+    assert not mentions_summer_2027("Estimating Intern", "Starts in fall 2027")
