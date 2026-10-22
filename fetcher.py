@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -21,7 +22,16 @@ DEFAULT_QUERIES = [
     "Project Engineer Intern",
     "Estimating Intern",
     "Construction Intern",
+    "Project Management Intern",
+    "Safety Intern",
+    "BIM / VDC Intern",
+    "Preconstruction Intern",
+    "Field Engineer Intern",
+    "Superintendent Intern",
+    "Construction Management Co-op",
 ]
+# Only titles containing one of these words are kept, so full-time roles are dropped.
+INTERN_TITLE_PATTERN = re.compile(r"\b(interns?|internships?|co-?ops?)\b", re.IGNORECASE)
 CACHE_FILE = Path(__file__).parent / "data" / "jobs_cache.json"
 CACHE_TTL_SECONDS = 60 * 60 * 24  # refresh once a day to conserve free searches
 
@@ -60,6 +70,11 @@ def normalize_job(raw: dict, query: str) -> Job:
     )
 
 
+def is_internship(title: str) -> bool:
+    """Return True when the job title names an internship or co-op role."""
+    return bool(INTERN_TITLE_PATTERN.search(title))
+
+
 def search_jobs(query: str, api_key: str, location: str = DEFAULT_LOCATION) -> list[Job]:
     """Run one Google Jobs search via SerpApi and return normalized jobs."""
     params = {
@@ -75,6 +90,9 @@ def search_jobs(query: str, api_key: str, location: str = DEFAULT_LOCATION) -> l
     payload = response.json()
 
     if "error" in payload:
+        # SerpApi reports a query with no matches as an error; that is an empty result, not a failure.
+        if "hasn't returned any results" in payload["error"]:
+            return []
         raise RuntimeError(f"SerpApi error for '{query}': {payload['error']}")
 
     return [normalize_job(raw, query) for raw in payload.get("jobs_results", [])]
@@ -90,6 +108,8 @@ def fetch_all(
     jobs: list[Job] = []
     for query in queries or DEFAULT_QUERIES:
         for job in search_jobs(query, api_key, location):
+            if not is_internship(job.title):
+                continue
             key = (job.company.lower(), job.title.lower(), job.apply_link)
             if key in seen:
                 continue
@@ -104,7 +124,8 @@ def load_or_fetch(api_key: str, force: bool = False) -> list[Job]:
         age = time.time() - CACHE_FILE.stat().st_mtime
         if age < CACHE_TTL_SECONDS:
             cached = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
-            return [Job(**row) for row in cached]
+            jobs = [Job(**row) for row in cached]
+            return [job for job in jobs if is_internship(job.title)]
 
     jobs = fetch_all(api_key)
     CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
