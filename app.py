@@ -29,6 +29,7 @@ def main() -> None:
             options=DEFAULT_QUERIES,
             default=DEFAULT_QUERIES,
         )
+        las_vegas_only = st.checkbox("Las Vegas only", value=True)
         keyword = st.text_input("Keyword in company or description")
         refresh = st.button("Refresh results")
 
@@ -41,6 +42,8 @@ def main() -> None:
         return
 
     filtered = df[df["query"].isin(selected_titles)] if selected_titles else df.iloc[0:0]
+    if las_vegas_only:
+        filtered = filtered[filtered["location"].str.contains("Las Vegas", case=False, regex=False)]
     if keyword:
         needle = keyword.lower()
         mask = (
