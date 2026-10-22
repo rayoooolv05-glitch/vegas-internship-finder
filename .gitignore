@@ -4,3 +4,4 @@ __pycache__/
 .env
 .streamlit.log
 .dashboard.png
+dashboard-tags.png
