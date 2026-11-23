@@ -1,100 +1,165 @@
-"""Streamlit dashboard for Construction Management internships in Las Vegas."""
+"""Streamlit dashboard for Construction Management internships in Southern Nevada."""
 
-import pandas as pd
+import os
+from datetime import date
+
 import streamlit as st
 
-from fetcher import (
-    DEFAULT_QUERIES,
-    get_api_key,
-    is_top_contractor,
-    load_or_fetch,
-    mentions_summer_2027,
-)
+from fetcher import DEFAULT_QUERIES, Job, get_searches_left, load_or_fetch
+from listing import SORT_OPTIONS, matches_filters, snippet, sort_jobs, tracked_csv, tracked_rows
+from tracking import load_tracking, set_flag
+
+PAGE_SIZE = 20
 
 st.set_page_config(page_title="Las Vegas Construction Internships", layout="wide")
 
 
-@st.cache_data(show_spinner="Fetching internships from Google Jobs...", ttl=60 * 60)
-def get_jobs_frame(api_key: str, force: bool) -> pd.DataFrame:
-    jobs = load_or_fetch(api_key, force=force)
-    df = pd.DataFrame([job.__dict__ for job in jobs])
-    if df.empty:
-        return df
-    df["top_contractor"] = df["company"].map(is_top_contractor)
-    df["summer_2027"] = [
-        mentions_summer_2027(title, description)
-        for title, description in zip(df["title"], df["description"])
-    ]
-    df["tags"] = [
-        " · ".join(
-            label
-            for label, flag in (
-                ("⭐ Top Contractor", top),
-                ("☀️ Summer 2027", summer),
+def resolve_api_key() -> str | None:
+    """Read the key from the environment first, then from .streamlit/secrets.toml."""
+    key = os.environ.get("SERPAPI_API_KEY")
+    if key:
+        return key
+    try:
+        return st.secrets["SERPAPI_API_KEY"]
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner="Loading internships...")
+def get_results(api_key: str, force: bool) -> tuple[list[Job], str, str]:
+    return load_or_fetch(api_key, force=force)
+
+
+@st.cache_data(ttl=60 * 60, show_spinner=False)
+def get_quota(api_key: str) -> int | None:
+    return get_searches_left(api_key)
+
+
+def save_flag(job_id: str, flag: str, key: str) -> None:
+    if not set_flag(job_id, flag, st.session_state[key]):
+        st.session_state["notice"] = "Could not save Saved/Applied changes to data/tracking.json."
+
+
+def show_more() -> None:
+    st.session_state["show_count"] = st.session_state.get("show_count", PAGE_SIZE) + PAGE_SIZE
+
+
+def deadline_text(job: Job) -> str:
+    if job.deadline_date is None:
+        return "Not listed"
+    text = job.deadline_date.strftime("%b %d, %Y")
+    return f"{text} (passed)" if job.deadline_date < date.today() else text
+
+
+def render_card(job: Job, state: dict) -> None:
+    with st.container(border=True):
+        details, actions = st.columns([4, 1])
+        with details:
+            st.markdown(f"#### {job.title}")
+            st.markdown(f"**{job.company}** · {job.location or 'Location not listed'}")
+            badges = []
+            if job.top_contractor:
+                badges.append("⭐ Top Contractor")
+            if job.summer_2027:
+                badges.append("☀️ Summer 2027")
+            if badges:
+                st.markdown(" · ".join(badges))
+            st.markdown(f"**Pay:** {job.pay or 'Pay not listed'}")
+            st.markdown(
+                f"**Deadline:** {deadline_text(job)}  \n"
+                f"**Posted:** {job.posted_at or 'Check listing'}"
             )
-            if flag
-        )
-        for top, summer in zip(df["top_contractor"], df["summer_2027"])
-    ]
-    return df
+            st.write(snippet(job.description))
+        with actions:
+            if job.apply_link:
+                st.link_button("Apply ↗", job.apply_link)
+            else:
+                st.caption("No apply link listed")
+            for flag, label in (("saved", "Saved"), ("applied", "Applied")):
+                key = f"{flag}_{job.job_id}"
+                st.toggle(
+                    label,
+                    value=state.get(flag, False),
+                    key=key,
+                    on_change=save_flag,
+                    args=(job.job_id, flag, key),
+                )
 
 
 def main() -> None:
-    st.title("Construction Management Internships: Las Vegas, NV")
+    st.title("Construction Management Internships")
+    st.caption("Las Vegas and Southern Nevada job sites · Google Jobs via SerpApi")
 
-    api_key = get_api_key()
+    api_key = resolve_api_key()
     if not api_key:
-        st.error("Set the SERPAPI_API_KEY environment variable, then restart the app.")
+        st.error(
+            "No SerpApi key found. Set SERPAPI_API_KEY in your environment or in "
+            ".streamlit/secrets.toml, then restart the app."
+        )
         st.stop()
 
     with st.sidebar:
         st.header("Filters")
-        selected_titles = st.multiselect(
-            "Job title",
-            options=DEFAULT_QUERIES,
-            default=DEFAULT_QUERIES,
+        titles = st.multiselect("Job title", options=DEFAULT_QUERIES, default=DEFAULT_QUERIES)
+        keyword = st.text_input("Keyword in company, title, or description")
+        sort_by = st.selectbox("Sort by", SORT_OPTIONS)
+        hide_applied = st.checkbox("Hide applied")
+        st.divider()
+        refresh = st.button(
+            "Refresh results", help=f"Runs {len(DEFAULT_QUERIES)} SerpApi searches."
         )
-        las_vegas_only = st.checkbox("Las Vegas only", value=True)
-        keyword = st.text_input("Keyword in company or description")
-        refresh = st.button("Refresh results")
+        if refresh:
+            get_results.clear()
+            get_quota.clear()
 
-    if refresh:
-        get_jobs_frame.clear()
-    df = get_jobs_frame(api_key, force=refresh)
+    jobs, fetched_at, message = get_results(api_key, refresh)
+    if refresh or message:
+        st.session_state["notice"] = message
+    tracking = load_tracking()
 
-    if df.empty:
-        st.info("No internships found right now. Try refreshing later.")
+    with st.sidebar:
+        quota = get_quota(api_key)
+        st.caption(f"SerpApi searches left this month: {quota if quota is not None else 'unknown'}")
+        st.caption(f"A refresh uses {len(DEFAULT_QUERIES)} searches. Page loads never search.")
+        st.download_button(
+            "Download saved & applied CSV",
+            data=tracked_csv(jobs, tracking),
+            file_name="las_vegas_internships_tracked.csv",
+            mime="text/csv",
+            disabled=not tracked_rows(jobs, tracking),
+        )
+
+    notice = st.session_state.get("notice", "")
+    if notice:
+        st.warning(notice)
+    st.caption(f"Last SerpApi refresh: {fetched_at or 'never (click Refresh results)'}")
+
+    visible = sort_jobs(
+        [job for job in jobs if matches_filters(job, titles, keyword, tracking, hide_applied)],
+        sort_by,
+    )
+    saved_count = sum(tracking.get(job.job_id, {}).get("saved", False) for job in jobs)
+    applied_count = sum(tracking.get(job.job_id, {}).get("applied", False) for job in jobs)
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Matching internships", len(visible))
+    col2.metric("Companies", len({job.company for job in visible}))
+    col3.metric("Saved", saved_count)
+    col4.metric("Applied", applied_count)
+
+    if not jobs:
+        st.info("No internships saved yet. Click Refresh results to search Las Vegas.")
+        return
+    if not visible:
+        st.info("No internships match these filters.")
         return
 
-    filtered = df[df["query"].isin(selected_titles)] if selected_titles else df.iloc[0:0]
-    if las_vegas_only:
-        filtered = filtered[filtered["location"].str.contains("Las Vegas", case=False, regex=False)]
-    if keyword:
-        needle = keyword.lower()
-        mask = (
-            filtered["company"].str.lower().str.contains(needle, regex=False)
-            | filtered["description"].str.lower().str.contains(needle, regex=False)
-        )
-        filtered = filtered[mask]
+    shown = visible[: st.session_state.get("show_count", PAGE_SIZE)]
+    for job in shown:
+        render_card(job, tracking.get(job.job_id, {}))
 
-    col1, col2 = st.columns(2)
-    col1.metric("Matching internships", len(filtered))
-    col2.metric("Companies", filtered["company"].nunique())
-
-    st.dataframe(
-        filtered[["company", "title", "tags", "location", "description", "apply_link"]],
-        column_config={
-            "company": "Company",
-            "title": "Job title",
-            "tags": st.column_config.TextColumn("Tags", width="medium"),
-            "location": "Location",
-            "description": "Description",
-            "apply_link": st.column_config.LinkColumn("Apply", display_text="Apply"),
-        },
-        hide_index=True,
-        use_container_width=True,
-    )
+    remaining = len(visible) - len(shown)
+    if remaining > 0:
+        st.button(f"Show {min(PAGE_SIZE, remaining)} more", on_click=show_more)
 
 
-if __name__ == "__main__":
-    main()
+main()
