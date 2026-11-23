@@ -82,8 +82,7 @@ class Job:
 
     @property
     def job_id(self) -> str:
-        key = f"{self.company}|{self.title}|{self.apply_link}".lower()
-        return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+        return make_job_id(self.company, self.title, self.apply_link)
 
     @property
     def posted_date(self) -> date | None:
@@ -104,6 +103,12 @@ class Job:
     @property
     def in_southern_nevada(self) -> bool:
         return is_southern_nevada(self.location)
+
+
+def make_job_id(company: str, title: str, apply_link: str) -> str:
+    """Stable key for a listing, used to store its Saved and Applied flags."""
+    key = f"{company}|{title}|{apply_link}".lower()
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
 
 
 def is_internship(title: str) -> bool:

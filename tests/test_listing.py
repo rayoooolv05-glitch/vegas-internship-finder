@@ -1,7 +1,7 @@
 from datetime import date
 
 from fetcher import Job
-from listing import matches_filters, snippet, sort_jobs, tracked_csv
+from listing import matches_filters, snippet, sort_jobs
 
 
 def make_job(company, title, deadline="", posted_on="", apply_link="", query="Estimating Intern"):
@@ -57,12 +57,3 @@ def test_best_match_puts_top_contractors_first():
 def test_snippet_trims_long_text_and_handles_empty():
     assert snippet("") == "No description listed."
     assert len(snippet("word " * 200)) <= 280
-
-
-def test_tracked_csv_includes_only_saved_or_applied_jobs():
-    tracking = {JOBS[2].job_id: {"saved": True}, JOBS[3].job_id: {"applied": True, "saved": False}}
-    lines = tracked_csv(JOBS, tracking).strip().splitlines()
-
-    assert lines[0].startswith("Company,Job title,Location,Pay,Deadline")
-    assert len(lines) == 3
-    assert "Pay not listed" in lines[1] or "Pay not listed" in lines[2]

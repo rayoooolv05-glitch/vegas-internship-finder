@@ -6,10 +6,20 @@ from datetime import date
 import streamlit as st
 
 from fetcher import DEFAULT_QUERIES, Job, get_searches_left, load_or_fetch
-from listing import SORT_OPTIONS, matches_filters, snippet, sort_jobs, tracked_csv, tracked_rows
-from tracking import load_tracking, set_flag
+from listing import SORT_OPTIONS, matches_filters, snippet, sort_jobs
+from tracking import (
+    details_for,
+    export_csv,
+    has_tracked,
+    load_tracking,
+    merge_tracking,
+    set_flag,
+    tracking_from_upload,
+    tracking_to_json,
+)
 
 PAGE_SIZE = 20
+RESTORE_KEY = "restore_file"
 
 st.set_page_config(page_title="Las Vegas Construction Internships", layout="wide")
 
@@ -35,9 +45,25 @@ def get_quota(api_key: str) -> int | None:
     return get_searches_left(api_key)
 
 
-def save_flag(job_id: str, flag: str, key: str) -> None:
-    if not set_flag(job_id, flag, st.session_state[key]):
+def save_flag(job: Job, flag: str, key: str) -> None:
+    if not set_flag(job.job_id, flag, st.session_state[key], details_for(job)):
         st.session_state["notice"] = "Could not save Saved/Applied changes to data/tracking.json."
+
+
+def restore_backup() -> None:
+    upload = st.session_state.get(RESTORE_KEY)
+    if upload is None:
+        st.session_state["notice"] = "Choose a .csv or .json backup file first."
+        return
+    try:
+        incoming = tracking_from_upload(upload.name, upload.getvalue())
+    except ValueError as error:
+        st.session_state["notice"] = f"Could not restore {upload.name}: {error}."
+        return
+    if merge_tracking(incoming):
+        st.session_state["notice"] = f"Restored {len(incoming)} listings from {upload.name}."
+    else:
+        st.session_state["notice"] = "Could not write data/tracking.json, so nothing was restored."
 
 
 def show_more() -> None:
@@ -82,7 +108,7 @@ def render_card(job: Job, state: dict) -> None:
                     value=state.get(flag, False),
                     key=key,
                     on_change=save_flag,
-                    args=(job.job_id, flag, key),
+                    args=(job, flag, key),
                 )
 
 
@@ -98,12 +124,16 @@ def main() -> None:
         )
         st.stop()
 
+    tracking = load_tracking()
+    any_applied = any(entry.get("applied") for entry in tracking.values())
+
     with st.sidebar:
         st.header("Filters")
         titles = st.multiselect("Job title", options=DEFAULT_QUERIES, default=DEFAULT_QUERIES)
         keyword = st.text_input("Keyword in company, title, or description")
         sort_by = st.selectbox("Sort by", SORT_OPTIONS)
-        hide_applied = st.checkbox("Hide applied")
+        # Starts on when applied listings exist; after that, your own choice is kept.
+        hide_applied = st.checkbox("Hide applied", value=any_applied)
         st.divider()
         refresh = st.button(
             "Refresh results", help=f"Runs {len(DEFAULT_QUERIES)} SerpApi searches."
@@ -115,19 +145,33 @@ def main() -> None:
     jobs, fetched_at, message = get_results(api_key, refresh)
     if refresh or message:
         st.session_state["notice"] = message
-    tracking = load_tracking()
 
     with st.sidebar:
         quota = get_quota(api_key)
         st.caption(f"SerpApi searches left this month: {quota if quota is not None else 'unknown'}")
         st.caption(f"A refresh uses {len(DEFAULT_QUERIES)} searches. Page loads never search.")
+        st.divider()
+        st.subheader("Backup and restore")
+        st.caption(
+            "Saved and Applied are stored on the server. Download a backup before a "
+            "redeploy, then restore it afterwards."
+        )
         st.download_button(
             "Download saved & applied CSV",
-            data=tracked_csv(jobs, tracking),
+            data=export_csv(tracking, jobs),
             file_name="las_vegas_internships_tracked.csv",
             mime="text/csv",
-            disabled=not tracked_rows(jobs, tracking),
+            disabled=not has_tracked(tracking),
         )
+        st.download_button(
+            "Download backup (JSON)",
+            data=tracking_to_json(tracking),
+            file_name="tracking_backup.json",
+            mime="application/json",
+            disabled=not tracking,
+        )
+        st.file_uploader("Restore from a CSV or JSON backup", type=["csv", "json"], key=RESTORE_KEY)
+        st.button("Restore saved & applied", on_click=restore_backup)
 
     notice = st.session_state.get("notice", "")
     if notice:
